@@ -37,6 +37,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (e) {
     console.error(e);
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json({ error: '選項載入失敗' }, { status: 500 });
   }
 }

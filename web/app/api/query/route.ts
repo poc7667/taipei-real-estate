@@ -45,9 +45,13 @@ export async function POST(req: NextRequest) {
        FROM ${t} ${where}`, params
     );
 
-    // 明細表（分頁 + 排序）
-    const page = Math.max(1, f.page ?? 1);
-    const pageSize = Math.min(200, f.pageSize ?? 50);
+    // 明細表（分頁 + 排序）— page/pageSize 一律 clamp 成合法正整數
+    const toInt = (v: unknown, def: number) => {
+      const n = Math.floor(Number(v));
+      return Number.isFinite(n) ? n : def;
+    };
+    const page = Math.max(1, toInt(f.page, 1));
+    const pageSize = Math.min(200, Math.max(1, toInt(f.pageSize, 50)));
     const sortable: Record<string, string> = {
       date: '期別', price: priceCol, total: '總價_萬',
       deedPing: '權狀總坪', mainPing: '主建物坪', ratio: '主建物佔比',
@@ -70,6 +74,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (e) {
     console.error(e);
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    // 不外洩內部 SQL/錯誤細節給 client
+    return NextResponse.json({ error: '查詢失敗，請調整條件後重試' }, { status: 500 });
   }
 }

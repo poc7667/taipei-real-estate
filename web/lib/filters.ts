@@ -51,7 +51,8 @@ export function buildWhere(f: Filters): { where: string; params: unknown[] } {
   if (to !== null) { cond.push(`${qExpr} <= ?`); params.push(to); }
 
   if (f.excludeOutlier) cond.push(`is_outlier = FALSE`);
-  if (f.onlyHighRatio) cond.push(`(主建物佔比 IS NULL OR 主建物佔比 >= 0.5)`);
+  // 只看主建物佔比 ≥50%（嚴格：NULL 視為不符，不納入）
+  if (f.onlyHighRatio) cond.push(`主建物佔比 >= 0.5`);
 
   const where = cond.length ? `WHERE ${cond.join(' AND ')}` : '';
   return { where, params };
