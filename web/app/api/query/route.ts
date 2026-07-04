@@ -24,27 +24,29 @@ export async function POST(req: NextRequest) {
       if (n < LANE_MIN_SAMPLE) aggregatedToSeg = true;
     }
 
-    // 趨勢：按期別 group，算選定單價中位 + 成交量
+    // 趨勢：按期別 group，算單價中位 + 成交量
+    // 折線圖固定用「權狀單價」（總價÷權狀坪），不跟隨單價下拉 — 權狀單價是市場行情通用基準
+    const TREND_PRICE = '單價_權狀';
     const trendWhere = aggregatedToSeg
       ? buildWhere({ ...f, roadLane: undefined }) // 聚合：放寬到「段」
       : { where, params };
     const trend = await query(
       `SELECT "期別" AS q,
-              MEDIAN("${priceCol}") AS price,
+              MEDIAN("${TREND_PRICE}") AS price,
               COUNT(*)::INT AS volume
        FROM ${t} ${trendWhere.where}
        GROUP BY "期別" ORDER BY "期別"`,
       trendWhere.params
     );
 
-    // 型別比較：未選特定建物型別時，回各型別×期別的單價中位（多線圖用）
+    // 型別比較：未選特定建物型別時，回各型別×期別的單價中位（多線圖用，同樣用權狀單價）
     let trendByType: Record<string, unknown>[] | null = null;
     if (!f.buildingType) {
       const typeCond = trendWhere.where
         ? `${trendWhere.where} AND "建物型別" IN ('公寓','華廈','住宅大樓','透天厝')`
         : `WHERE "建物型別" IN ('公寓','華廈','住宅大樓','透天厝')`;
       const rows = await query<{ q: string; bt: string; price: number }>(
-        `SELECT "期別" AS q, "建物型別" AS bt, MEDIAN("${priceCol}") AS price
+        `SELECT "期別" AS q, "建物型別" AS bt, MEDIAN("${TREND_PRICE}") AS price
          FROM ${t} ${typeCond}
          GROUP BY "期別", "建物型別" ORDER BY "期別"`,
         trendWhere.params
@@ -63,7 +65,7 @@ export async function POST(req: NextRequest) {
       `SELECT COUNT(*)::INT AS count,
               MEDIAN("${priceCol}") AS median_price,
               MEDIAN("主建物佔比") AS median_ratio
-       FROM ${t} ${where}`, params
+       FROM ${t} ${trendWhere.where}`, trendWhere.params
     );
 
     // 明細表（分頁 + 排序）— page/pageSize 一律 clamp 成合法正整數
@@ -72,21 +74,20 @@ export async function POST(req: NextRequest) {
       return Number.isFinite(n) ? n : def;
     };
     const page = Math.max(1, toInt(f.page, 1));
-    const pageSize = Math.min(200, Math.max(1, toInt(f.pageSize, 50)));
+    // 上限放寬到 5000，讓「顯示全部」可行（單一地段/巷通常遠低於此）
+    const pageSize = Math.min(5000, Math.max(1, toInt(f.pageSize, 1000)));
     const sortable: Record<string, string> = {
-      date: '期別', price: priceCol, total: '總價_萬',
-      deedPing: '權狀總坪', mainPing: '主建物坪', ratio: '主建物佔比',
+      date: '期別', price: priceCol, deedPrice: '單價_權狀', mainPrice: '單價_主建物',
+      total: '總價_萬', deedPing: '權狀總坪', mainPing: '主建物坪', ratio: '主建物佔比',
     };
     const sortCol = sortable[f.sortBy ?? 'date'] ?? '期別';
     const sortDir = f.sortDir === 'asc' ? 'ASC' : 'DESC';
     const rows = await query(
-      `SELECT "期別", "西元年", "月", "行政區", "路段巷", "路段", "路", "建物型別",
-              "權狀總坪", "主建物坪", "${priceCol}" AS 選定單價,
-              "總價_萬", "主建物佔比", is_outlier, is_low_ratio
-       FROM ${t} ${where}
+      `SELECT *, "${priceCol}" AS 選定單價
+       FROM ${t} ${trendWhere.where}
        ORDER BY "${sortCol}" ${sortDir} NULLS LAST
        LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
-      params
+      trendWhere.params
     );
 
     return NextResponse.json({

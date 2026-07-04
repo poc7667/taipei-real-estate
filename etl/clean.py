@@ -114,6 +114,8 @@ def process_member(zf, member, city, kind, season):
     ci_bal = find_col(h, "陽台面積")
     ci_aux = find_col(h, "附屬建物面積")
     ci_room = find_col(h, "建物現況格局-房")
+    ci_floor = find_col(h, "移轉層次")
+    ci_total_floor = find_col(h, "總樓層數")
     targets = SALE_TARGETS if is_sale else RENT_TARGETS
     maxidx = max(h.values())
 
@@ -155,6 +157,9 @@ def process_member(zf, member, city, kind, season):
             縣市=city, 交易類型=kind, 行政區=g(r, ci_dist),
             西元年=y, 月=mth, 期別=ym,
             路=road, 路段=seg, 路段巷=lane,
+            門牌=g(r, ci_addr).strip(),          # 完整地址門牌（最細粒度）
+            移轉層次=g(r, ci_floor).strip() or None,
+            總樓層數=g(r, ci_total_floor).strip() or None,
             建物型別=norm_type(g(r, ci_bt)),
             權狀總坪=round(deed_m2 / PING, 3) if deed_m2 > 0 else None,  # 淨權狀坪（與單價_權狀一致）
             主建物坪=round(main_m2 / PING, 3) if main_m2 else None,

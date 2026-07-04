@@ -47,11 +47,12 @@ export default function Page() {
     city: '臺北市', district: '大安區', buildingType: '公寓', txType: '買賣',
     road: '信義路', roadSeg: '信義路三段', roadLane: '信義路三段147巷', fromQ: '', toQ: '',
     priceKind: 'main', excludeOutlier: true, onlyHighRatio: false,
-    page: 1, pageSize: 50, sortBy: 'date', sortDir: 'desc',
+    page: 1, pageSize: 1000, sortBy: 'date', sortDir: 'desc',
   });
   const [res, setRes] = useState<Result | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [detail, setDetail] = useState<Row | null>(null); // 點列顯示原始資料
 
   // 載入下拉選項（級聯）
   const loadOptions = useCallback(async () => {
@@ -88,13 +89,15 @@ export default function Page() {
   const ch = createColumnHelper<Row>();
   const columns = [
     ch.accessor((r) => `${r['西元年']}/${String(r['月']).padStart(2, '0')}`, { id: 'date', header: '交易日期' }),
-    ch.accessor((r) => r['路段巷'] || r['路段'] || r['路'] || r['行政區'], { id: 'seg', header: '地段' }),
+    ch.accessor((r) => r['門牌'] || r['路段巷'] || r['路段'] || r['路'] || r['行政區'], { id: 'addr', header: '完整地址' }),
+    ch.accessor((r) => r['移轉層次'] ? `${r['移轉層次']}/${r['總樓層數'] ?? '?'}` : '—', { id: 'floor', header: '樓層/總樓' }),
     ch.accessor('建物型別', { header: '型別' }),
     ch.accessor('權狀總坪', { header: '權狀坪', cell: (c) => wan(c.getValue() as number) }),
     ch.accessor('主建物坪', { header: '主建物坪', cell: (c) => wan(c.getValue() as number) }),
-    ch.accessor('選定單價', { header: '單價(萬/坪)', cell: (c) => wan(c.getValue() as number) }),
+    ch.accessor('單價_權狀', { header: '權狀單價(萬/坪)', cell: (c) => wan(c.getValue() as number) }),
+    ch.accessor('單價_主建物', { header: '主建物單價(萬/坪)', cell: (c) => wan(c.getValue() as number) }),
     ch.accessor('總價_萬', { header: '總價(萬)', cell: (c) => wan(c.getValue() as number) }),
-    ch.accessor('主建物佔比', { header: '佔比', cell: (c) => { const v = c.getValue() as number; return v == null ? '—' : `${(v * 100).toFixed(0)}%`; } }),
+    ch.accessor('主建物佔比', { header: '主建物佔比', cell: (c) => { const v = c.getValue() as number; return v == null ? '—' : `${(v * 100).toFixed(0)}%`; } }),
     ch.display({
       id: 'flags', header: '標記',
       cell: (c) => {
@@ -107,11 +110,20 @@ export default function Page() {
         );
       },
     }),
+    ch.display({
+      id: 'detail', header: '原始資料',
+      cell: (c) => (
+        <a onClick={(e) => { e.stopPropagation(); setDetail(c.row.original); }}
+          style={{ color: '#2563eb', cursor: 'pointer', textDecoration: 'underline', fontSize: '.75rem' }}>
+          查看 ↗
+        </a>
+      ),
+    }),
   ];
   const table = useReactTable({ data: res?.rows ?? [], columns, getCoreRowModel: getCoreRowModel() });
 
   const sortBy = (id: string) => {
-    const map: Record<string, string> = { date: 'date', seg: 'date', 選定單價: 'price', '總價_萬': 'total', '權狀總坪': 'deedPing', '主建物坪': 'mainPing', '主建物佔比': 'ratio' };
+    const map: Record<string, string> = { date: 'date', addr: 'date', floor: 'date', 單價_權狀: 'deedPrice', 單價_主建物: 'mainPrice', '總價_萬': 'total', '權狀總坪': 'deedPing', '主建物坪': 'mainPing', '主建物佔比': 'ratio' };
     const key = map[id] ?? 'date';
     const dir = f.sortBy === key && f.sortDir === 'desc' ? 'asc' : 'desc';
     setF((p: any) => ({ ...p, sortBy: key, sortDir: dir }));
@@ -166,7 +178,7 @@ export default function Page() {
           <section style={card}>
             <div style={{ display: 'flex', alignItems: 'center' }}>
               <h3 style={{ margin: 0, fontSize: '.95rem' }}>
-                {res.trendByType ? '各型別單價趨勢 + 成交量' : '價量趨勢'}
+                {res.trendByType ? '各型別權狀單價趨勢 + 成交量' : '權狀單價量趨勢'}
               </h3>
               {res.aggregatedToSeg && <span style={{ marginLeft: 'auto', fontSize: '.7rem', color: '#f59e0b', background: '#fffbeb', padding: '2px 8px', borderRadius: 999 }}>⚠ 樣本&lt;8，已聚合至「段」</span>}
             </div>
@@ -188,7 +200,7 @@ export default function Page() {
                     ))
                   ) : (
                     // 選特定型別 → 單線
-                    <Line yAxisId="l" dataKey="price" name="單價(萬/坪)" stroke="#2563eb" strokeWidth={2.5} dot={false} />
+                    <Line yAxisId="l" dataKey="price" name="權狀單價(萬/坪)" stroke="#2563eb" strokeWidth={2.5} dot={false} />
                   )}
                 </ComposedChart>
               </ResponsiveContainer>
@@ -197,7 +209,15 @@ export default function Page() {
 
           {/* 明細表 */}
           <section style={card}>
-            <h3 style={{ margin: '0 0 8px', fontSize: '.95rem' }}>成交明細</h3>
+            <h3 style={{ margin: '0 0 4px', fontSize: '.95rem' }}>成交明細</h3>
+            {res.aggregatedToSeg && (
+              <p style={{ margin: '0 0 6px', fontSize: '.74rem', color: '#f59e0b', background: '#fffbeb', padding: '6px 10px', borderRadius: 6 }}>
+                ⚠ 此巷（含所選型別）樣本 &lt;8，KPI／圖／表已一併放寬到「段」層級顯示，確保三者一致。
+              </p>
+            )}
+            <p style={{ margin: '0 0 8px', fontSize: '.72rem', color: '#64748b' }}>
+              「主建物佔比」= 主建物坪 ÷ 權狀總坪。愈高代表室內實坪愈實在（公設/陽台佔比愈低）；&lt;50% 標「低實用」。點「查看」可看原始完整資料。
+            </p>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.8rem' }}>
                 <thead>
@@ -225,15 +245,40 @@ export default function Page() {
                 </tbody>
               </table>
             </div>
-            {/* 分頁 */}
+            {/* 全部顯示：共 N 筆（若超過上限才提示） */}
             <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10, fontSize: '.78rem', color: '#64748b' }}>
-              <span>共 {res.total} 筆</span>
-              <button style={pg} disabled={f.page <= 1} onClick={() => { const p = f.page - 1; set('page', p); runQuery({ page: p }); }}>‹</button>
-              <span style={{ padding: '2px 8px' }}>第 {f.page} 頁</span>
-              <button style={pg} disabled={f.page * f.pageSize >= res.total} onClick={() => { const p = f.page + 1; set('page', p); runQuery({ page: p }); }}>›</button>
+              <span>共 {res.total} 筆{res.total > res.rows.length ? `（顯示前 ${res.rows.length} 筆，請縮小地段範圍看完整）` : '（全部顯示）'}</span>
             </div>
           </section>
         </>
+      )}
+
+      {/* 原始資料明細 modal */}
+      {detail && (
+        <div onClick={() => setDetail(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ background: '#fff', borderRadius: 10, maxWidth: 640, width: '100%', maxHeight: '85vh', overflow: 'auto', padding: '20px 24px', boxShadow: '0 10px 40px rgba(0,0,0,.2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: '1rem' }}>原始資料（實價登錄）</h3>
+              <button onClick={() => setDetail(null)} style={{ marginLeft: 'auto', border: 'none', background: 'none', fontSize: '1.3rem', cursor: 'pointer', color: '#64748b' }}>×</button>
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.8rem' }}>
+              <tbody>
+                {Object.entries(detail)
+                  .filter(([k]) => k !== '選定單價')
+                  .map(([k, v]) => (
+                    <tr key={k}>
+                      <td style={{ borderBottom: '1px solid #f1f5f9', padding: '6px 10px', color: '#64748b', whiteSpace: 'nowrap', width: '38%' }}>{k}</td>
+                      <td style={{ borderBottom: '1px solid #f1f5f9', padding: '6px 10px', fontWeight: 500 }}>
+                        {v === null || v === undefined || v === '' ? '—' : String(v)}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
     </main>
   );
