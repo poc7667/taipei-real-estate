@@ -1,0 +1,12 @@
+data/raw/*.zip
+data/taipei/
+data/daan/
+clean.parquet
+web/node_modules/
+web/.next/
+verify/
+evidence/
+*.output
+.playwright-cli/
+.playwright-mcp/
+*.png
