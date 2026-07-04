@@ -37,6 +37,27 @@ export async function POST(req: NextRequest) {
       trendWhere.params
     );
 
+    // 型別比較：未選特定建物型別時，回各型別×期別的單價中位（多線圖用）
+    let trendByType: Record<string, unknown>[] | null = null;
+    if (!f.buildingType) {
+      const typeCond = trendWhere.where
+        ? `${trendWhere.where} AND "建物型別" IN ('公寓','華廈','住宅大樓','透天厝')`
+        : `WHERE "建物型別" IN ('公寓','華廈','住宅大樓','透天厝')`;
+      const rows = await query<{ q: string; bt: string; price: number }>(
+        `SELECT "期別" AS q, "建物型別" AS bt, MEDIAN("${priceCol}") AS price
+         FROM ${t} ${typeCond}
+         GROUP BY "期別", "建物型別" ORDER BY "期別"`,
+        trendWhere.params
+      );
+      // long → wide：每期一列，各型別一欄
+      const byQ = new Map<string, Record<string, unknown>>();
+      for (const r of rows) {
+        if (!byQ.has(r.q)) byQ.set(r.q, { q: r.q });
+        byQ.get(r.q)![r.bt] = r.price;
+      }
+      trendByType = Array.from(byQ.values());
+    }
+
     // KPI
     const [kpi] = await query(
       `SELECT COUNT(*)::INT AS count,
@@ -69,7 +90,7 @@ export async function POST(req: NextRequest) {
     );
 
     return NextResponse.json({
-      kpi, trend, rows, total: kpi?.count ?? 0,
+      kpi, trend, trendByType, rows, total: kpi?.count ?? 0,
       aggregatedToSeg, priceCol,
     });
   } catch (e) {

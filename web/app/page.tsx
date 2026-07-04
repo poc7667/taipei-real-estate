@@ -15,6 +15,7 @@ type Row = Record<string, any>;
 type Result = {
   kpi: { count: number; median_price: number; median_ratio: number } | null;
   trend: { q: string; price: number; volume: number }[];
+  trendByType: Record<string, any>[] | null;
   rows: Row[]; total: number; aggregatedToSeg: boolean; priceCol: string;
 };
 
@@ -27,11 +28,24 @@ const PRICE_KINDS = [
 const wan = (n: number | null | undefined) =>
   n == null ? '—' : Number(n).toLocaleString('zh-TW', { maximumFractionDigits: 1 });
 
+// 建物型別多線圖：型別 + 配色
+const BUILDING_TYPES = ['公寓', '華廈', '住宅大樓', '透天厝'];
+const TYPE_COLORS: Record<string, string> = {
+  公寓: '#2563eb', 華廈: '#10b981', 住宅大樓: '#f59e0b', 透天厝: '#8b5cf6',
+};
+
+// 把成交量(trend)併進各型別趨勢(trendByType)，同一期別一列
+function mergeTrend(res: Result): Record<string, unknown>[] {
+  if (!res.trendByType) return res.trend as unknown as Record<string, unknown>[];
+  const vol = new Map(res.trend.map((t) => [t.q, t.volume]));
+  return res.trendByType.map((row: any) => ({ ...row, volume: vol.get(row.q) ?? 0 }));
+}
+
 export default function Page() {
   const [opt, setOpt] = useState<Options | null>(null);
   const [f, setF] = useState<any>({
-    city: '臺北市', district: '大安區', buildingType: '', txType: '買賣',
-    road: '', roadSeg: '', roadLane: '', fromQ: '', toQ: '',
+    city: '臺北市', district: '大安區', buildingType: '公寓', txType: '買賣',
+    road: '信義路', roadSeg: '信義路三段', roadLane: '信義路三段147巷', fromQ: '', toQ: '',
     priceKind: 'main', excludeOutlier: true, onlyHighRatio: false,
     page: 1, pageSize: 50, sortBy: 'date', sortDir: 'desc',
   });
@@ -151,20 +165,31 @@ export default function Page() {
           {/* 價量圖 */}
           <section style={card}>
             <div style={{ display: 'flex', alignItems: 'center' }}>
-              <h3 style={{ margin: 0, fontSize: '.95rem' }}>價量趨勢</h3>
+              <h3 style={{ margin: 0, fontSize: '.95rem' }}>
+                {res.trendByType ? '各型別單價趨勢 + 成交量' : '價量趨勢'}
+              </h3>
               {res.aggregatedToSeg && <span style={{ marginLeft: 'auto', fontSize: '.7rem', color: '#f59e0b', background: '#fffbeb', padding: '2px 8px', borderRadius: 999 }}>⚠ 樣本&lt;8，已聚合至「段」</span>}
             </div>
-            <div style={{ width: '100%', height: 260 }}>
+            <div style={{ width: '100%', height: 300 }}>
               <ResponsiveContainer>
-                <ComposedChart data={res.trend} margin={{ top: 16, right: 16, bottom: 8, left: 0 }}>
+                <ComposedChart data={mergeTrend(res)} margin={{ top: 16, right: 16, bottom: 8, left: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                   <XAxis dataKey="q" fontSize={11} />
                   <YAxis yAxisId="l" fontSize={11} label={{ value: '萬/坪', angle: -90, position: 'insideLeft', fontSize: 11 }} />
                   <YAxis yAxisId="r" orientation="right" fontSize={11} label={{ value: '件', angle: 90, position: 'insideRight', fontSize: 11 }} />
                   <Tooltip />
                   <Legend />
-                  <Bar yAxisId="r" dataKey="volume" name="成交量(件)" fill="#c7d2fe" />
-                  <Line yAxisId="l" dataKey="price" name="單價(萬/坪)" stroke="#2563eb" strokeWidth={2.5} dot={false} />
+                  <Bar yAxisId="r" dataKey="volume" name="成交量(件)" fill="#e2e8f0" />
+                  {res.trendByType ? (
+                    // 型別「全部」→ 各型別一條線
+                    BUILDING_TYPES.map((bt) => (
+                      <Line key={bt} yAxisId="l" dataKey={bt} name={bt}
+                        stroke={TYPE_COLORS[bt]} strokeWidth={2} dot={false} connectNulls />
+                    ))
+                  ) : (
+                    // 選特定型別 → 單線
+                    <Line yAxisId="l" dataKey="price" name="單價(萬/坪)" stroke="#2563eb" strokeWidth={2.5} dot={false} />
+                  )}
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
