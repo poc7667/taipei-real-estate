@@ -69,6 +69,9 @@ def parse_addr(addr, district):
     road = re.sub(r'^[一-鿿]{1,3}區', '', road)                    # 大安區
     road = re.sub(r'^[一-鿿]{1,3}里', '', road)                    # 某某里
     if not road: return None, None, None
+    # 仍殘留行政區/縣市字（非「大道」合法用字）→ 視為 parse 失敗
+    if road != "市民大道" and re.search(r'[區縣]|.{2}市', road):
+        return None, None, None
     seg = road + (m.group(2) + "段" if m.group(2) else "")
     lane = seg + (m.group(3) + "巷" if m.group(3) else "")
     return road, seg, lane

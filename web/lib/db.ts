@@ -1,26 +1,38 @@
-import { Database } from 'duckdb-async';
+import { DuckDBInstance, DuckDBConnection } from '@duckdb/node-api';
 import path from 'path';
 
-// ponytail: 單一 DB 連線，read-only 開啟 clean.parquet。分析型工具無並發寫入需求。
+// ponytail: 單一 in-memory DuckDB 連線直讀 parquet。分析工具無並發寫入。
 const PARQUET = path.join(process.cwd(), '..', 'clean.parquet');
 
-let dbPromise: Promise<Database> | null = null;
-async function getDb(): Promise<Database> {
-  if (!dbPromise) dbPromise = Database.create(':memory:');
-  return dbPromise;
+let connPromise: Promise<DuckDBConnection> | null = null;
+async function getConn(): Promise<DuckDBConnection> {
+  if (!connPromise) {
+    connPromise = (async () => {
+      const inst = await DuckDBInstance.create(':memory:');
+      return inst.connect();
+    })();
+  }
+  return connPromise;
 }
 
-// 參數化查詢：所有使用者輸入走 prepared params，杜絕 SQL injection
+// 參數化查詢：使用者輸入一律走 prepared params，杜絕 SQL injection
 export async function query<T = Record<string, unknown>>(
   sql: string,
   params: unknown[] = []
 ): Promise<T[]> {
-  const db = await getDb();
-  const rows = await db.all(sql, ...params);
-  return rows as T[];
+  const conn = await getConn();
+  const reader = params.length
+    ? await conn.runAndReadAll(sql, params as never[])
+    : await conn.runAndReadAll(sql);
+  // DuckDB 回傳 BigInt（COUNT 等）→ JSON 無法序列化，轉成 number
+  return reader.getRowObjects().map((r) => {
+    const o: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(r)) o[k] = typeof v === 'bigint' ? Number(v) : v;
+    return o;
+  }) as T[];
 }
 
-// 讓 SQL 直接讀 parquet 檔（DuckDB 語法）
+// SQL 直讀 parquet
 export function src(): string {
   return `read_parquet('${PARQUET.replace(/'/g, "''")}')`;
 }
