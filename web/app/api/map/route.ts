@@ -45,7 +45,33 @@ export async function POST(req: NextRequest) {
       [...params, ...geoParams]
     );
 
-    return NextResponse.json({ points: rows, count: rows.length });
+    // 逐筆成交（表格用）：bounds 內的段 → 該些段所有成交明細
+    // 段座標近似 in-bounds（選項 A）。上限 1000，回總數供「請放大」提示。
+    const ROW_CAP = 1000;
+    const geoSel = `SELECT DISTINCT "縣市","行政區","路段" FROM ${geo} g WHERE ${geoWhere}`;
+    const [{ n: rowsTotal }] = await query<{ n: number }>(
+      `WITH filtered AS (SELECT * FROM ${t} ${where}),
+            segs AS (${geoSel})
+       SELECT COUNT(*)::INT AS n
+       FROM filtered f JOIN segs s
+         ON f."縣市"=s."縣市" AND f."行政區"=s."行政區" AND f."路段"=s."路段"`,
+      [...params, ...geoParams]
+    );
+    const detailRows = await query(
+      `WITH filtered AS (SELECT * FROM ${t} ${where}),
+            segs AS (${geoSel})
+       SELECT f.*
+       FROM filtered f JOIN segs s
+         ON f."縣市"=s."縣市" AND f."行政區"=s."行政區" AND f."路段"=s."路段"
+       ORDER BY f."期別" DESC
+       LIMIT ${ROW_CAP}`,
+      [...params, ...geoParams]
+    );
+
+    return NextResponse.json({
+      points: rows, count: rows.length,
+      rows: detailRows, rowsTotal, rowCap: ROW_CAP,
+    });
   } catch (e) {
     console.error(e);
     return NextResponse.json({ error: '地圖資料載入失敗' }, { status: 500 });

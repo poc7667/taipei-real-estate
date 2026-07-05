@@ -64,6 +64,9 @@ export default function Page() {
   const [detail, setDetail] = useState<Row | null>(null); // 點列顯示原始資料
   const [view, setView] = useState<'table' | 'map'>('table'); // 表格/地圖切換
   const [mapPoints, setMapPoints] = useState<MapPoint[]>([]);
+  const [mapRows, setMapRows] = useState<Row[]>([]);      // 地圖 bounds 內逐筆成交（表格連動）
+  const [mapRowsTotal, setMapRowsTotal] = useState(0);    // 範圍內總筆數（判斷是否超上限）
+  const [mapRowCap, setMapRowCap] = useState(1000);
   const [mapLoading, setMapLoading] = useState(false);
 
   // 載入下拉選項（級聯）
@@ -109,7 +112,10 @@ export default function Page() {
       });
       const json = await r.json();
       setMapPoints(json.points ?? []);
-    } catch { setMapPoints([]); }
+      setMapRows(json.rows ?? []);
+      setMapRowsTotal(json.rowsTotal ?? 0);
+      setMapRowCap(json.rowCap ?? 1000);
+    } catch { setMapPoints([]); setMapRows([]); setMapRowsTotal(0); }
     finally { setMapLoading(false); }
   }, [f]);
 
@@ -192,6 +198,8 @@ export default function Page() {
     }),
   ];
   const table = useReactTable({ data: res?.rows ?? [], columns, getCoreRowModel: getCoreRowModel() });
+  // 地圖連動表格：bounds 內逐筆成交，共用同一組 columns
+  const mapTable = useReactTable({ data: mapRows, columns, getCoreRowModel: getCoreRowModel() });
 
   const sortBy = (id: string) => {
     const map: Record<string, string> = { date: 'date', addr: 'date', floor: 'date', 單價_權狀: 'deedPrice', 單價_主建物: 'mainPrice', '總價_萬': 'total', '權狀總坪': 'deedPing', '主建物坪': 'mainPing', '主建物佔比': 'ratio' };
@@ -256,6 +264,53 @@ export default function Page() {
           <p style={{ margin: '8px 0 0', fontSize: '.7rem', color: '#64748b' }}>
             🗺️ 地圖模式：<b>忽略行政區／路段篩選</b>，改顯示<b>地圖可視範圍內</b>所有符合（縣市／建物型別／期間）的地段。拖曳或縮放地圖即重新載入。點圓點看中位權狀單價／成交量／佔比。座標為 OSM 段質心（涵蓋約 88%）。
           </p>
+        </section>
+      )}
+
+      {/* 地圖連動：可視範圍內逐筆成交明細（隨拖曳更新） */}
+      {view === 'map' && (
+        <section style={card}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 8 }}>
+            <h3 style={{ margin: 0, fontSize: '.95rem' }}>範圍內成交明細</h3>
+            <span style={{ fontSize: '.72rem', color: '#64748b' }}>
+              {mapLoading ? '載入中…' : `範圍內共 ${mapRowsTotal.toLocaleString()} 筆`}
+            </span>
+          </div>
+          {mapRowsTotal > mapRowCap && (
+            <p style={{ margin: '0 0 8px', fontSize: '.74rem', color: '#f59e0b', background: '#fffbeb', padding: '6px 10px', borderRadius: 6 }}>
+              ⚠ 範圍太大（{mapRowsTotal.toLocaleString()} 筆），僅顯示最新 {mapRowCap.toLocaleString()} 筆。<b>請放大地圖</b>縮小範圍以列出完整逐筆成交。
+            </p>
+          )}
+          {mapRows.length === 0 && !mapLoading ? (
+            <p style={{ fontSize: '.8rem', color: '#94a3b8' }}>此範圍無成交，或拖曳地圖到有資料的區域。</p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.8rem' }}>
+                <thead>
+                  {mapTable.getHeaderGroups().map((hg) => (
+                    <tr key={hg.id}>
+                      {hg.headers.map((h) => (
+                        <th key={h.id} style={{ borderBottom: '1px solid #e2e8f0', padding: '7px 8px', textAlign: 'right', background: '#f8fafc', color: '#64748b', whiteSpace: 'nowrap' }}>
+                          {flexRender(h.column.columnDef.header, h.getContext())}
+                        </th>
+                      ))}
+                    </tr>
+                  ))}
+                </thead>
+                <tbody>
+                  {mapTable.getRowModel().rows.map((r) => (
+                    <tr key={r.id}>
+                      {r.getVisibleCells().map((c) => (
+                        <td key={c.id} style={{ borderBottom: '1px solid #f1f5f9', padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          {flexRender(c.column.columnDef.cell, c.getContext())}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
 
