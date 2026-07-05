@@ -1,11 +1,16 @@
 'use client';
 import { useEffect, useState, useCallback, useRef } from 'react';
+import dynamic from 'next/dynamic';
 import {
   ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
 import {
   useReactTable, getCoreRowModel, flexRender, createColumnHelper,
 } from '@tanstack/react-table';
+
+// 地圖用 Leaflet，需在 client 端載入（no SSR）
+const MapView = dynamic(() => import('./MapView'), { ssr: false });
+type MapPoint = { lat: number; lon: number; city: string; district: string; seg: string; price: number; volume: number; ratio: number | null; };
 
 type Options = {
   cities: string[]; districts: string[]; buildingTypes: string[];
@@ -57,6 +62,9 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<Row | null>(null); // 點列顯示原始資料
+  const [view, setView] = useState<'table' | 'map'>('table'); // 表格/地圖切換
+  const [mapPoints, setMapPoints] = useState<MapPoint[]>([]);
+  const [mapLoading, setMapLoading] = useState(false);
 
   // 載入下拉選項（級聯）
   const loadOptions = useCallback(async () => {
@@ -87,6 +95,24 @@ export default function Page() {
 
   useEffect(() => { runQuery(); /* 初次載入自動查 */ }, []); // eslint-disable-line
 
+  // 地圖資料：切到地圖 tab 或按查詢時載入
+  const fetchMap = useCallback(async (override?: any) => {
+    setMapLoading(true);
+    try {
+      const body = { ...f, ...override };
+      const r = await fetch('/api/map', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await r.json();
+      setMapPoints(json.points ?? []);
+    } catch { setMapPoints([]); }
+    finally { setMapLoading(false); }
+  }, [f]);
+
+  // 地圖：切到地圖 tab、或在地圖 tab 時篩選變動 → 重新載入
+  useEffect(() => { if (view === 'map') fetchMap(); }, [view, fetchMap]); // eslint-disable-line
+
   const set = (k: string, v: any) => setF((p: any) => {
     const next = { ...p, [k]: v };
     // 土地連動：土地用地號定位（無路/段/巷），單價只有「權狀」有值
@@ -101,6 +127,31 @@ export default function Page() {
     return next;
   });
   const isLand = f.buildingType === '土地';
+
+  // 目前生效、且會縮小結果的篩選（不含 txType/priceKind/排序/分頁 — 那些不會造成 0 筆）
+  // 用於 empty state 解釋「是哪些條件把結果篩空的」+ 提供一鍵清除。
+  const NARROWING: { k: string; label: string; v: string }[] = [
+    { k: 'city', label: '縣市', v: f.city },
+    { k: 'district', label: '行政區', v: f.district },
+    { k: 'buildingType', label: '建物型別', v: f.buildingType },
+    { k: 'road', label: '路', v: f.road },
+    { k: 'roadSeg', label: '段', v: f.roadSeg },
+    { k: 'roadLane', label: '巷', v: f.roadLane },
+    { k: 'fromQ', label: '期間起', v: f.fromQ },
+    { k: 'toQ', label: '期間迄', v: f.toQ },
+  ].filter((x) => x.v);
+
+  // 清除地段三級（路/段/巷）—— 最常見的互斥來源
+  const clearAddr = () => {
+    setF((p: any) => ({ ...p, road: '', roadSeg: '', roadLane: '', page: 1 }));
+    runQuery({ road: '', roadSeg: '', roadLane: '', page: 1 });
+  };
+  // 清除全部篩選（保留交易類型=買賣，回到首屏兩市全量）
+  const clearAll = () => {
+    const reset = { city: '', district: '', buildingType: '', road: '', roadSeg: '', roadLane: '', fromQ: '', toQ: '', page: 1 };
+    setF((p: any) => ({ ...p, ...reset, priceKind: 'main' }));
+    runQuery({ ...reset, priceKind: 'main' });
+  };
 
   // 表格
   const ch = createColumnHelper<Row>();
@@ -174,14 +225,66 @@ export default function Page() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginTop: 12 }}>
           <label style={chk}><input type="checkbox" checked={f.excludeOutlier} onChange={(e) => set('excludeOutlier', e.target.checked)} /> 排除 outlier</label>
           <label style={chk}><input type="checkbox" checked={f.onlyHighRatio} onChange={(e) => set('onlyHighRatio', e.target.checked)} /> 只看主建物佔比 ≥50%</label>
-          <button style={btn} onClick={() => runQuery({ page: 1 })}>查詢</button>
+          <button style={btn} onClick={() => { runQuery({ page: 1 }); if (view === 'map') fetchMap(); }}>查詢</button>
         </div>
       </section>
 
-      {loading && <div style={{ ...card, textAlign: 'center', color: '#64748b' }}>查詢中…</div>}
+      {/* 表格 / 地圖 切換 tab */}
+      <div style={{ display: 'flex', gap: 8, margin: '4px 0 12px' }}>
+        <button onClick={() => setView('table')} style={tab(view === 'table')}>📋 表格</button>
+        <button onClick={() => setView('map')} style={tab(view === 'map')}>🗺️ 地圖</button>
+      </div>
+
+      {view === 'map' && (
+        <section style={card}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+            <h3 style={{ margin: 0, fontSize: '.95rem' }}>地圖（段級聚合 · 色=權狀單價 · 大小=成交量）</h3>
+            <span style={{ marginLeft: 'auto', fontSize: '.72rem', color: '#64748b' }}>
+              {mapLoading ? '載入中…' : `${mapPoints.length} 個地段`}
+            </span>
+          </div>
+          <MapView points={mapPoints} />
+          <p style={{ margin: '8px 0 0', fontSize: '.7rem', color: '#64748b' }}>
+            點圓點看該地段中位權狀單價／成交量／佔比。座標為 OSM 段質心，涵蓋率約 88%（少數新路段無座標不顯示）。
+          </p>
+        </section>
+      )}
+
+      {view === 'table' && loading && <div style={{ ...card, textAlign: 'center', color: '#64748b' }}>查詢中…</div>}
       {error && <div style={{ ...card, borderColor: '#ef4444', color: '#ef4444' }}>查詢失敗：{error}</div>}
 
-      {res && !loading && (
+      {view === 'table' && res && !loading && res.total === 0 && (
+        <section style={{ ...card, textAlign: 'center', padding: '32px 24px' }}>
+          <div style={{ fontSize: '2rem', marginBottom: 8 }}>🔍</div>
+          <h3 style={{ margin: '0 0 6px', fontSize: '1rem' }}>此篩選組合查無成交資料</h3>
+          <p style={{ margin: '0 0 4px', fontSize: '.82rem', color: '#64748b' }}>
+            資料庫本身有 1,293,190 筆台北+新北實價登錄；空白是<b>目前的篩選條件太窄或互斥</b>，不是資料缺失。
+          </p>
+          {NARROWING.length > 0 && (
+            <div style={{ margin: '14px 0', display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center' }}>
+              <span style={{ fontSize: '.78rem', color: '#64748b', alignSelf: 'center' }}>目前生效篩選：</span>
+              {NARROWING.map((x) => (
+                <span key={x.k} style={{ fontSize: '.75rem', background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: 999, padding: '3px 10px' }}>
+                  {x.label}：{x.v}
+                </span>
+              ))}
+            </div>
+          )}
+          {(f.road || f.roadSeg || f.roadLane) && (
+            <p style={{ margin: '0 0 14px', fontSize: '.78rem', color: '#f59e0b' }}>
+              ⚠ 常見原因：所選「路/段/巷」在此「縣市×行政區×型別」下沒有成交（例如土地用地號登記、無路名）。
+            </p>
+          )}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+            {(f.road || f.roadSeg || f.roadLane) && (
+              <button style={btnOutline} onClick={clearAddr}>清除地段（路/段/巷）</button>
+            )}
+            <button style={btn} onClick={clearAll}>清除全部篩選</button>
+          </div>
+        </section>
+      )}
+
+      {view === 'table' && res && !loading && res.total > 0 && (
         <>
           {/* KPI */}
           <div style={grid4}>
@@ -306,6 +409,12 @@ const card: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8
 const grid4: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 8 };
 const chk: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: '.82rem' };
 const btn: React.CSSProperties = { marginLeft: 'auto', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 22px', fontWeight: 600, cursor: 'pointer' };
+const tab = (active: boolean): React.CSSProperties => ({
+  background: active ? '#2563eb' : '#fff', color: active ? '#fff' : '#64748b',
+  border: '1px solid ' + (active ? '#2563eb' : '#e2e8f0'), borderRadius: 6,
+  padding: '6px 18px', fontWeight: 600, cursor: 'pointer', fontSize: '.85rem',
+});
+const btnOutline: React.CSSProperties = { background: '#fff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: 6, padding: '8px 18px', fontWeight: 600, cursor: 'pointer' };
 function badge(color: string, bg: string): React.CSSProperties {
   return { display: 'inline-block', fontSize: '.62rem', padding: '1px 5px', borderRadius: 3, fontWeight: 600, color, background: bg, marginLeft: 3 };
 }
