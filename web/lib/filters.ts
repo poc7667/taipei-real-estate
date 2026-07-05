@@ -3,7 +3,8 @@ import { src } from './db';
 export type Filters = {
   city?: string;
   district?: string;
-  buildingType?: string;
+  buildingType?: string;         // 單選（表格模式相容）
+  buildingTypes?: string[];      // 多選 checkbox（優先於 buildingType）
   txType?: string; // 買賣 | 租賃
   road?: string;
   roadSeg?: string;
@@ -12,6 +13,7 @@ export type Filters = {
   toQ?: string;
   excludeOutlier?: boolean; // 預設 true
   onlyHighRatio?: boolean; // 主建物佔比 >=50%
+  mapMode?: boolean;             // 地圖模式：忽略行政區/路段，改用地圖 bounds
 };
 
 // 依單價種類選欄位
@@ -36,12 +38,22 @@ export function buildWhere(f: Filters): { where: string; params: unknown[] } {
     if (val) { cond.push(`"${col}" = ?`); params.push(val); }
   };
   eq('縣市', f.city);
-  eq('行政區', f.district);
-  eq('建物型別', f.buildingType);
+  // 地圖模式：忽略行政區/路段（改用地圖 bounds 篩選），只保留縣市/型別/類型/期間
+  if (!f.mapMode) {
+    eq('行政區', f.district);
+    eq('路', f.road);
+    eq('路段', f.roadSeg);
+    eq('路段巷', f.roadLane);
+  }
   eq('交易類型', f.txType);
-  eq('路', f.road);
-  eq('路段', f.roadSeg);
-  eq('路段巷', f.roadLane);
+  // 建物型別：多選優先（IN 清單），否則單選
+  const types = (f.buildingTypes ?? []).filter(Boolean);
+  if (types.length) {
+    cond.push(`"建物型別" IN (${types.map(() => '?').join(',')})`);
+    params.push(...types);
+  } else {
+    eq('建物型別', f.buildingType);
+  }
 
   const from = qToInt(f.fromQ);
   const to = qToInt(f.toQ);

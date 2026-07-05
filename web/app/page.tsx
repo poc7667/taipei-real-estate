@@ -53,7 +53,7 @@ export default function Page() {
   //   city:'臺北市', district:'大安區', buildingType:'公寓',
   //   road:'信義路', roadSeg:'信義路三段', roadLane:'信義路三段147巷',
   const [f, setF] = useState<any>({
-    city: '', district: '', buildingType: '', txType: '買賣',
+    city: '', district: '', buildingType: '', buildingTypes: [], txType: '買賣',
     road: '', roadSeg: '', roadLane: '', fromQ: '', toQ: '',
     priceKind: 'main', excludeOutlier: true, onlyHighRatio: false,
     page: 1, pageSize: 1000, sortBy: 'date', sortDir: 'desc',
@@ -95,11 +95,14 @@ export default function Page() {
 
   useEffect(() => { runQuery(); /* 初次載入自動查 */ }, []); // eslint-disable-line
 
-  // 地圖資料：切到地圖 tab 或按查詢時載入
-  const fetchMap = useCallback(async (override?: any) => {
+  // 地圖資料：依「目前地圖 bounds + 篩選」載入（忽略行政區/路段）
+  const boundsRef = useRef<any>(null);
+  const fetchMap = useCallback(async (bounds?: any) => {
+    const b = bounds ?? boundsRef.current;
+    if (b) boundsRef.current = b;
     setMapLoading(true);
     try {
-      const body = { ...f, ...override };
+      const body = { ...f, bounds: b };
       const r = await fetch('/api/map', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -110,8 +113,8 @@ export default function Page() {
     finally { setMapLoading(false); }
   }, [f]);
 
-  // 地圖：切到地圖 tab、或在地圖 tab 時篩選變動 → 重新載入
-  useEffect(() => { if (view === 'map') fetchMap(); }, [view, fetchMap]); // eslint-disable-line
+  // 地圖 tab 開啟時、或篩選變動時 → 用目前 bounds 重擈
+  useEffect(() => { if (view === 'map' && boundsRef.current) fetchMap(); }, [view, fetchMap]); // eslint-disable-line
 
   const set = (k: string, v: any) => setF((p: any) => {
     const next = { ...p, [k]: v };
@@ -209,7 +212,13 @@ export default function Page() {
         <div style={grid4}>
           <Field label="縣市"><SearchSelect v={f.city} on={(v) => set('city', v)} opts={opt?.cities} allowEmpty emptyLabel="全部" /></Field>
           <Field label="行政區"><SearchSelect v={f.district} on={(v) => set('district', v)} opts={opt?.districts} allowEmpty emptyLabel="全部" /></Field>
-          <Field label="建物型別"><SearchSelect v={f.buildingType} on={(v) => set('buildingType', v)} opts={opt?.buildingTypes} allowEmpty emptyLabel="全部" /></Field>
+          <Field label="建物型別（可多選）"><TypeChecks selected={f.buildingTypes} opts={opt?.buildingTypes} onToggle={(t) => {
+            setF((p: any) => {
+              const cur: string[] = p.buildingTypes ?? [];
+              const next = cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t];
+              return { ...p, buildingTypes: next, buildingType: '' };
+            });
+          }} /></Field>
           <Field label="交易類型"><SearchSelect v={f.txType} on={(v) => set('txType', v)} opts={['買賣', '租賃']} /></Field>
         </div>
         <div style={grid4}>
@@ -243,9 +252,9 @@ export default function Page() {
               {mapLoading ? '載入中…' : `${mapPoints.length} 個地段`}
             </span>
           </div>
-          <MapView points={mapPoints} />
+          <MapView points={mapPoints} onBoundsChange={(b) => fetchMap(b)} />
           <p style={{ margin: '8px 0 0', fontSize: '.7rem', color: '#64748b' }}>
-            點圓點看該地段中位權狀單價／成交量／佔比。座標為 OSM 段質心，涵蓋率約 88%（少數新路段無座標不顯示）。
+            🗺️ 地圖模式：<b>忽略行政區／路段篩選</b>，改顯示<b>地圖可視範圍內</b>所有符合（縣市／建物型別／期間）的地段。拖曳或縮放地圖即重新載入。點圓點看中位權狀單價／成交量／佔比。座標為 OSM 段質心（涵蓋約 88%）。
           </p>
         </section>
       )}
@@ -420,6 +429,28 @@ function badge(color: string, bg: string): React.CSSProperties {
 }
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}><label style={{ fontSize: '.72rem', color: '#64748b', fontWeight: 600 }}>{label}</label>{children}</div>;
+}
+// 建物型別多選 checkbox（chip 樣式，勾選=藍底）
+function TypeChecks({ selected, opts, onToggle }: { selected: string[]; opts?: string[]; onToggle: (t: string) => void }) {
+  const list = opts ?? [];
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+      {list.length === 0 && <span style={{ fontSize: '.75rem', color: '#94a3b8' }}>載入中…</span>}
+      {list.map((t) => {
+        const on = selected?.includes(t);
+        return (
+          <button key={t} type="button" onClick={() => onToggle(t)}
+            style={{
+              fontSize: '.75rem', padding: '4px 9px', borderRadius: 6, cursor: 'pointer',
+              border: '1px solid ' + (on ? '#2563eb' : '#e2e8f0'),
+              background: on ? '#2563eb' : '#fff', color: on ? '#fff' : '#334155', fontWeight: on ? 600 : 400,
+            }}>
+            {on ? '✓ ' : ''}{t}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 function Kpi({ k, v }: { k: string; v: string }) {
   return <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: '11px 13px', background: '#f8fafc' }}>
