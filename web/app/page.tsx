@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
@@ -43,9 +43,13 @@ function mergeTrend(res: Result): Record<string, unknown>[] {
 
 export default function Page() {
   const [opt, setOpt] = useState<Options | null>(null);
+  // 預設不鎖任何地段，首屏即顯示 臺北市+新北市 全部買賣。
+  // 大安信義路三段147巷研究快捷（要用再填回）:
+  //   city:'臺北市', district:'大安區', buildingType:'公寓',
+  //   road:'信義路', roadSeg:'信義路三段', roadLane:'信義路三段147巷',
   const [f, setF] = useState<any>({
-    city: '臺北市', district: '大安區', buildingType: '公寓', txType: '買賣',
-    road: '信義路', roadSeg: '信義路三段', roadLane: '信義路三段147巷', fromQ: '', toQ: '',
+    city: '', district: '', buildingType: '', txType: '買賣',
+    road: '', roadSeg: '', roadLane: '', fromQ: '', toQ: '',
     priceKind: 'main', excludeOutlier: true, onlyHighRatio: false,
     page: 1, pageSize: 1000, sortBy: 'date', sortDir: 'desc',
   });
@@ -83,7 +87,20 @@ export default function Page() {
 
   useEffect(() => { runQuery(); /* 初次載入自動查 */ }, []); // eslint-disable-line
 
-  const set = (k: string, v: any) => setF((p: any) => ({ ...p, [k]: v }));
+  const set = (k: string, v: any) => setF((p: any) => {
+    const next = { ...p, [k]: v };
+    // 土地連動：土地用地號定位（無路/段/巷），單價只有「權狀」有值
+    // → 選土地時清空地段三級並切「①權狀」；離開土地時單價切回「②主建物」
+    if (k === 'buildingType') {
+      if (v === '土地') {
+        next.road = ''; next.roadSeg = ''; next.roadLane = ''; next.priceKind = 'deed';
+      } else if (p.buildingType === '土地') {
+        next.priceKind = 'main';
+      }
+    }
+    return next;
+  });
+  const isLand = f.buildingType === '土地';
 
   // 表格
   const ch = createColumnHelper<Row>();
@@ -139,20 +156,20 @@ export default function Page() {
       {/* 篩選 */}
       <section style={card}>
         <div style={grid4}>
-          <Field label="縣市"><Sel v={f.city} on={(v) => set('city', v)} opts={opt?.cities} /></Field>
-          <Field label="行政區"><Sel v={f.district} on={(v) => set('district', v)} opts={opt?.districts} allowEmpty /></Field>
-          <Field label="建物型別"><Sel v={f.buildingType} on={(v) => set('buildingType', v)} opts={opt?.buildingTypes} allowEmpty emptyLabel="全部" /></Field>
-          <Field label="交易類型"><Sel v={f.txType} on={(v) => set('txType', v)} opts={['買賣', '租賃']} /></Field>
+          <Field label="縣市"><SearchSelect v={f.city} on={(v) => set('city', v)} opts={opt?.cities} allowEmpty emptyLabel="全部" /></Field>
+          <Field label="行政區"><SearchSelect v={f.district} on={(v) => set('district', v)} opts={opt?.districts} allowEmpty emptyLabel="全部" /></Field>
+          <Field label="建物型別"><SearchSelect v={f.buildingType} on={(v) => set('buildingType', v)} opts={opt?.buildingTypes} allowEmpty emptyLabel="全部" /></Field>
+          <Field label="交易類型"><SearchSelect v={f.txType} on={(v) => set('txType', v)} opts={['買賣', '租賃']} /></Field>
         </div>
         <div style={grid4}>
-          <Field label="路"><Sel v={f.road} on={(v) => set('road', v)} opts={opt?.roads} allowEmpty emptyLabel="全部" /></Field>
-          <Field label="段"><Sel v={f.roadSeg} on={(v) => set('roadSeg', v)} opts={opt?.roadSegs} allowEmpty emptyLabel="全部" /></Field>
-          <Field label="巷"><Sel v={f.roadLane} on={(v) => set('roadLane', v)} opts={opt?.roadLanes} allowEmpty emptyLabel="全部" /></Field>
-          <Field label="單價種類"><Sel v={f.priceKind} on={(v) => set('priceKind', v)} opts={PRICE_KINDS.map((k) => k.v)} labels={PRICE_KINDS.reduce((a, k) => ({ ...a, [k.v]: k.label }), {})} /></Field>
+          <Field label="路"><SearchSelect v={f.road} on={(v) => set('road', v)} opts={opt?.roads} allowEmpty emptyLabel={isLand ? '土地無路名' : '全部'} disabled={isLand} /></Field>
+          <Field label="段"><SearchSelect v={f.roadSeg} on={(v) => set('roadSeg', v)} opts={opt?.roadSegs} allowEmpty emptyLabel={isLand ? '土地無路段' : '全部'} disabled={isLand} /></Field>
+          <Field label="巷"><SearchSelect v={f.roadLane} on={(v) => set('roadLane', v)} opts={opt?.roadLanes} allowEmpty emptyLabel={isLand ? '土地無巷弄' : '全部'} disabled={isLand} /></Field>
+          <Field label="單價種類"><SearchSelect v={f.priceKind} on={(v) => set('priceKind', v)} opts={PRICE_KINDS.map((k) => k.v)} labels={PRICE_KINDS.reduce((a, k) => ({ ...a, [k.v]: k.label }), {})} /></Field>
         </div>
         <div style={grid4}>
-          <Field label="期間(起)"><Sel v={f.fromQ} on={(v) => set('fromQ', v)} opts={opt?.quarters} allowEmpty emptyLabel="最早" /></Field>
-          <Field label="期間(迄)"><Sel v={f.toQ} on={(v) => set('toQ', v)} opts={opt?.quarters} allowEmpty emptyLabel="最新" /></Field>
+          <Field label="期間(起)"><SearchSelect v={f.fromQ} on={(v) => set('fromQ', v)} opts={opt?.quarters} allowEmpty emptyLabel="最早" /></Field>
+          <Field label="期間(迄)"><SearchSelect v={f.toQ} on={(v) => set('toQ', v)} opts={opt?.quarters} allowEmpty emptyLabel="最新" /></Field>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginTop: 12 }}>
           <label style={chk}><input type="checkbox" checked={f.excludeOutlier} onChange={(e) => set('excludeOutlier', e.target.checked)} /> 排除 outlier</label>
@@ -289,7 +306,6 @@ const card: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8
 const grid4: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 8 };
 const chk: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: '.82rem' };
 const btn: React.CSSProperties = { marginLeft: 'auto', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 22px', fontWeight: 600, cursor: 'pointer' };
-const pg: React.CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 5, padding: '2px 9px', background: '#fff', cursor: 'pointer' };
 function badge(color: string, bg: string): React.CSSProperties {
   return { display: 'inline-block', fontSize: '.62rem', padding: '1px 5px', borderRadius: 3, fontWeight: 600, color, background: bg, marginLeft: 3 };
 }
@@ -302,12 +318,65 @@ function Kpi({ k, v }: { k: string; v: string }) {
     <div style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: 2 }}>{v}</div>
   </div>;
 }
-function Sel({ v, on, opts, allowEmpty, emptyLabel, labels }: { v: string; on: (v: string) => void; opts?: string[]; allowEmpty?: boolean; emptyLabel?: string; labels?: Record<string, string> }) {
+// 可搜尋下拉：輸入即時過濾清單，點選才套值（限定只能選清單內選項）。disabled 時灰化不可用。
+function SearchSelect({ v, on, opts, allowEmpty, emptyLabel, labels, disabled }: {
+  v: string; on: (v: string) => void; opts?: string[]; allowEmpty?: boolean; emptyLabel?: string; labels?: Record<string, string>; disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const box = useRef<HTMLDivElement>(null);
+  const label = (val: string) => labels?.[val] ?? val;
+  const display = v ? label(v) : (emptyLabel ?? '全部');
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const list = (opts ?? []).filter((o) => label(o).toLowerCase().includes(q.toLowerCase()));
+  const pick = (val: string) => { on(val); setOpen(false); setQ(''); };
+
   return (
-    <select value={v} onChange={(e) => on(e.target.value)}
-      style={{ border: '1px solid #e2e8f0', borderRadius: 6, padding: '7px 9px', fontSize: '.82rem', background: '#fff', color: '#0f172a' }}>
-      {allowEmpty && <option value="">{emptyLabel ?? '全部'}</option>}
-      {(opts ?? []).map((o) => <option key={o} value={o}>{labels?.[o] ?? o}</option>)}
-    </select>
+    <div ref={box} style={{ position: 'relative' }}>
+      <input
+        value={open ? q : display}
+        placeholder={display}
+        disabled={disabled}
+        onFocus={() => { if (!disabled) { setOpen(true); setQ(''); } }}
+        onChange={(e) => setQ(e.target.value)}
+        style={{
+          width: '100%', boxSizing: 'border-box', border: '1px solid #e2e8f0', borderRadius: 6,
+          padding: '7px 9px', fontSize: '.82rem', color: disabled ? '#94a3b8' : '#0f172a',
+          background: disabled ? '#f1f5f9' : '#fff', cursor: disabled ? 'not-allowed' : 'text',
+        }}
+      />
+      {open && !disabled && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 30, marginTop: 2,
+          background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, maxHeight: 240,
+          overflowY: 'auto', boxShadow: '0 6px 20px rgba(0,0,0,.1)',
+        }}>
+          {allowEmpty && <Opt label={emptyLabel ?? '全部'} active={v === ''} onClick={() => pick('')} muted />}
+          {list.length === 0 && <div style={{ padding: '7px 10px', fontSize: '.78rem', color: '#94a3b8' }}>無符合項目</div>}
+          {list.map((o) => <Opt key={o} label={label(o)} active={v === o} onClick={() => pick(o)} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+function Opt({ label, active, onClick, muted }: { label: string; active: boolean; onClick: () => void; muted?: boolean }) {
+  return (
+    <div onMouseDown={(e) => { e.preventDefault(); onClick(); }}
+      style={{
+        padding: '7px 10px', fontSize: '.82rem', cursor: 'pointer',
+        background: active ? '#eff6ff' : 'transparent', color: muted ? '#64748b' : '#0f172a',
+        fontWeight: active ? 600 : 400,
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = active ? '#eff6ff' : '#f8fafc'; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = active ? '#eff6ff' : 'transparent'; }}>
+      {label}
+    </div>
   );
 }

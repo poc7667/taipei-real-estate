@@ -23,8 +23,8 @@ PING = 3.3058
 CITY = {"a": "臺北市", "f": "新北市"}
 KIND = {"a": "買賣", "c": "租賃"}
 
-# 交易標的白名單：含住宅/建物（租賃歷史大宗是「建物」）；排除純土地/純車位
-SALE_TARGETS = {"房地(土地+建物)", "房地(土地+建物)+車位", "建物"}
+# 交易標的白名單：含住宅/建物（租賃歷史大宗是「建物」）+ 純土地；排除純車位
+SALE_TARGETS = {"房地(土地+建物)", "房地(土地+建物)+車位", "建物", "土地"}
 RENT_TARGETS = {"租賃房屋", "租賃房屋+車位", "建物", "房地(土地+建物)", "房地(土地+建物)+車位"}
 IQR_MIN_SAMPLE = 30  # outlier 分群最小樣本
 
@@ -48,8 +48,10 @@ def roc_to_ce(s):
     if not (1 <= m <= 12): return None, None, None
     return y, m, f"{y}Q{(m - 1)//3 + 1}"
 
-# 路名：路/街/道/大道 擇一（大道優先，避免被「道」搶先）；段吃阿拉伯+中文數字
-ROAD_RE = re.compile(r'([一-鿿]+?(?:大道|路|街|道))(\d+|[一二三四五六七八九十]+)?(?:段)?(\d+)?(?:巷)?')
+# 路名：路/街/道/大道 擇一（大道優先，避免被「道」搶先）
+# 段：原始門牌一律國字（一段~六段），阿拉伯數字都是門牌/巷號，故段只認國字
+# 巷：阿拉伯數字 + 巷（FULLWIDTH 已把全形轉半形）
+ROAD_RE = re.compile(r'([一-鿿]+?(?:大道|路|街|道))([一二三四五六七八九十]段)?(\d+巷)?')
 def parse_addr(addr, district):
     """去掉縣市+行政區前綴後抽路名。回 (路, 路+段, 路+段+巷)。抓不到回 (None,)*3"""
     if not addr: return None, None, None
@@ -61,6 +63,8 @@ def parse_addr(addr, district):
         a = re.sub(r'^.*?[市縣]', '', a)             # 退路：砍到縣市
         a = re.sub(r'^[一-鿿]{1,4}區', '', a)         # 砍行政區
     a = re.sub(r'^[一-鿿]{1,4}里', '', a)            # 砍里
+    a = re.sub(r'^\d+鄰', '', a)                      # 砍鄰（如「29鄰」）
+    a = re.sub(r'^[一-鿿]{1,4}里', '', a)            # 里可能在鄰之後，再砍一次
     m = ROAD_RE.match(a)
     if not m: return None, None, None
     road = m.group(1)
@@ -72,8 +76,8 @@ def parse_addr(addr, district):
     # 仍殘留行政區/縣市字（非「大道」合法用字）→ 視為 parse 失敗
     if road != "市民大道" and re.search(r'[區縣]|.{2}市', road):
         return None, None, None
-    seg = road + (m.group(2) + "段" if m.group(2) else "")
-    lane = seg + (m.group(3) + "巷" if m.group(3) else "")
+    seg = road + (m.group(2) or "")            # m.group(2) 已含「段」，如「二段」
+    lane = seg + (m.group(3) or "")            # m.group(3) 已含「巷」，如「147巷」
     return road, seg, lane
 
 def fnum(x):
@@ -105,6 +109,7 @@ def process_member(zf, member, city, kind, season):
     ci_price = find_col(h, "總價元" if is_sale else "總額元")
     ci_pk_price = find_col(h, "車位總價元" if is_sale else "車位總額元")
     ci_bld = find_col(h, "建物移轉總面積平方公尺", "建物總面積平方公尺")
+    ci_land = find_col(h, "土地移轉總面積平方公尺", "土地移轉總面積(平方公尺)")
     ci_pk_area = find_col(h, "車位移轉總面積平方公尺", "車位移轉總面積(平方公尺)", "車位面積平方公尺")
     ci_tgt = find_col(h, "交易標的")
     ci_dist = find_col(h, "鄉鎮市區")
@@ -131,10 +136,12 @@ def process_member(zf, member, city, kind, season):
         if not price or price <= 1: continue
         pk_price = fnum(g(r, ci_pk_price)) or 0.0
         bld_m2 = fnum(g(r, ci_bld)) or 0.0
+        land_m2 = fnum(g(r, ci_land)) or 0.0
         pk_m2 = fnum(g(r, ci_pk_area)) or 0.0
-        main_m2 = fnum(g(r, ci_main)) if is_sale else None
-        bal_m2 = fnum(g(r, ci_bal)) if is_sale else None
-        aux_m2 = fnum(g(r, ci_aux)) if is_sale else None
+        is_land = (tgt == "土地")  # 純土地：無建物，用土地坪當單價分母
+        main_m2 = fnum(g(r, ci_main)) if (is_sale and not is_land) else None
+        bal_m2 = fnum(g(r, ci_bal)) if (is_sale and not is_land) else None
+        aux_m2 = fnum(g(r, ci_aux)) if (is_sale and not is_land) else None
 
         net_price = price - pk_price
         if net_price <= 0:  # 車位價 >= 總價：資料異常，整列丟
@@ -142,7 +149,8 @@ def process_member(zf, member, city, kind, season):
         # 有車位面積但車位價=0 → 淨價其實仍含車位，標記存疑
         price_suspect = (pk_m2 > 0 and pk_price == 0)
 
-        deed_m2 = bld_m2 - pk_m2  # 淨權狀面積（扣車位）
+        # 單價分母：土地交易用土地坪；建物交易用扣車位後的權狀坪
+        deed_m2 = land_m2 if is_land else (bld_m2 - pk_m2)
         def upp(m2):
             if not m2 or m2 <= 0: return None
             return round(net_price / (m2 / PING) / 10000, 3)
@@ -160,8 +168,8 @@ def process_member(zf, member, city, kind, season):
             門牌=g(r, ci_addr).strip(),          # 完整地址門牌（最細粒度）
             移轉層次=g(r, ci_floor).strip() or None,
             總樓層數=g(r, ci_total_floor).strip() or None,
-            建物型別=norm_type(g(r, ci_bt)),
-            權狀總坪=round(deed_m2 / PING, 3) if deed_m2 > 0 else None,  # 淨權狀坪（與單價_權狀一致）
+            建物型別="土地" if is_land else norm_type(g(r, ci_bt)),
+            權狀總坪=round(deed_m2 / PING, 3) if deed_m2 > 0 else None,  # 土地=土地坪；建物=淨權狀坪
             主建物坪=round(main_m2 / PING, 3) if main_m2 else None,
             車位坪=round(pk_m2 / PING, 3) if pk_m2 else None,
             總價_萬=round(price / 10000, 2),
