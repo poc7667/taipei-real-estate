@@ -152,8 +152,11 @@ def process_member(zf, member, city, kind, season):
         # 單價分母：土地交易用土地坪；建物交易用扣車位後的權狀坪
         deed_m2 = land_m2 if is_land else (bld_m2 - pk_m2)
         def upp(m2):
-            if not m2 or m2 <= 0: return None
-            return round(net_price / (m2 / PING) / 10000, 3)
+            # 面積 <3.3㎡(≈1坪) 視為無效分母（原始資料填 0/0.01 造成單價爆表）
+            if not m2 or m2 < 3.3: return None
+            v = round(net_price / (m2 / PING) / 10000, 3)
+            # 單價 >500 萬/坪 = 原始面積漏填的髒列（雙北實際最貴約 200-300）→ 無效
+            return v if v <= 500 else None
         u_deed = upp(deed_m2)
         u_main = upp(main_m2) if main_m2 else None
         incl = (main_m2 or 0) + (bal_m2 or 0) + (aux_m2 or 0)
