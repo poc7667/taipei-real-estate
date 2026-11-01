@@ -12,3 +12,4 @@ evidence/
 *.png
 seg_geo.parquet
 data/geocode_cache.json
+data/m01_*.jsonl

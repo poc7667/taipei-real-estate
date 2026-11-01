@@ -1,0 +1,92 @@
+# datasette config for the mobile01 thread DB.
+#   uvx datasette data/m01.db -m datasette.yml --open
+# Nothing is installed -- uvx runs it in a throwaway env.
+title: 淡海 mobile01 語料庫
+description_html: |-
+  <p>mobile01 淡海相關討論串。<b>body 只含作者自己打的字</b>（引用區塊已剝掉），
+  所以搜到的每一筆都是本人在講，不是引用到別人。<code>reply_to</code> 可回推討論串。
+  純噪音（空白/+1/感謝/≤12字無關鍵字）已在建檔時移除。</p>
+  <p>左側 <b>tags</b> facet 可勾選主題、<b>thread</b> 選討論串、<b>yr</b> 選年份。
+  2 字詞（漏水/坪數）用欄位篩選的 <code>contains</code>，
+  ≥3 字詞可用上方全文搜尋（FTS5，附相關度排序）。</p>
+  <p>thread 對照：<code>3008946</code> 淡海新市鎮房事討論區(II)、
+  <code>7000512</code> 天水一墅集中討論。</p>
+
+databases:
+  m01:
+    tables:
+      posts:
+        title: 貼文
+        description: 2012-10 ~ 2026-08 · 多討論串合併 · 引用已剝除
+        sort_desc: ts
+        # `array: tags` is load-bearing. A plain `tags` facet buckets by the whole
+        # JSON string, so you get ["builder","transit"]:743 as one bucket instead
+        # of a checkbox per tag.
+        facets: [{array: tags}, thread, yr, author]
+        fts_table: posts_fts
+        fts_pk: id
+        columns:
+          thread: 討論串
+          ts: 發文時間
+          author: 作者
+          body: 內文（不含引用）
+          tags: 主題標籤
+          reply_to: 回覆對象
+          quote_author: 引用的人（含已離開的帳號）
+          page: 頁
+          floor: 樓
+          n_img: 圖數
+          imgs: 圖片網址
+          yr: 年
+        # ponytail: no `units:` block -- datasette runs values through pint, which
+        # rejects CJK unit names ('張' is not in the unit registry) and 500s the page.
+      comments:
+        title: 樓中樓留言
+        description: 掛在 posts.id 底下
+    # ponytail: posts_fts/_data/_idx are FTS5 internals -- hiding them keeps the
+    # table list to the two tables you actually browse.
+    tables_hidden: [posts_fts, posts_fts_data, posts_fts_idx, posts_fts_docsize,
+                    posts_fts_config]
+
+    queries:
+      天水一墅全文:
+        title: 天水一墅集中討論（全部 39 篇，你的主目標）
+        sql: |-
+          select ts, author, body, tags, page, floor from posts
+          where thread = '7000512' order by ts
+      別墅相關全部:
+        title: 別墅／電梯別墅（villa tag，跨討論串）
+        sql: |-
+          select ts, thread, author, body, tags, page, floor from posts
+          where exists (select 1 from json_each(posts.tags) where value = 'villa')
+          order by ts desc
+      價格情報:
+        title: 有具體價格數字的貼文
+        sql: |-
+          select ts, thread, author, body, page, floor from posts
+          where exists (select 1 from json_each(posts.tags) where value = 'price')
+            and body glob '*[0-9]*'
+          order by ts desc
+      瑕疵抱怨:
+        title: 漏水／壁癌／施工品質
+        sql: |-
+          select ts, thread, author, body, page, floor from posts
+          where exists (select 1 from json_each(posts.tags) where value = 'defect')
+          order by ts desc
+      逐年熱度:
+        title: 每年發文量與主題組成
+        sql: |-
+          select yr,
+                 count(*) as 總篇數,
+                 sum(tags like '%price%')   as 談價格,
+                 sum(tags like '%transit%') as 談交通,
+                 sum(tags like '%defect%')  as 談瑕疵,
+                 sum(tags like '%villa%')   as 談別墅
+          from posts group by yr order by yr
+      發言排行:
+        title: 誰講最多、誰最愛回誰
+        sql: |-
+          select author as 作者, count(*) as 篇數,
+                 round(avg(length(body))) as 平均字數,
+                 group_concat(distinct reply_to) as 常回覆對象
+          from posts group by author order by 篇數 desc limit 40
